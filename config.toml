@@ -1,7 +1,7 @@
 [server]
 # Server configuration
 host = "0.0.0.0"
-port = 8000
+port = 8181
 
 [auth]
 require_auth = false
@@ -27,4 +27,4 @@ format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 log_file = "mcp_sandbox.log"
 
 [mirror]
-pypi_index_url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+pypi_index_url = "http://localhost:3141/root/pypi/+simple/"

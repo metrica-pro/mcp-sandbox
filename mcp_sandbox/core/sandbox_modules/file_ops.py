@@ -40,12 +40,13 @@ class SandboxFileOpsMixin:
             return []
 
     def get_file_link(self, sandbox_id: str, file_path: str) -> str:
-        from mcp_sandbox.utils.config import config
+        from mcp_sandbox.utils.config import HOST, PORT
         from mcp_sandbox.db.database import db
-        
-        base_url = getattr(config, "BASE_URL", None) or "http://localhost:8000"
-        
+
+        base_url = f"http://{HOST}:{PORT}"
+
         sandbox = db.get_sandbox(sandbox_id)
+        api_key = None
         if sandbox and sandbox.get("user_id"):
             user_id = sandbox.get("user_id")
             user = db.get_user(user_id=user_id)
@@ -56,7 +57,7 @@ class SandboxFileOpsMixin:
         url = f"{base_url}/sandbox/file?sandbox_id={sandbox_id}&file_path={file_path}"
         if api_key:
             url += f"&api_key={api_key}"
-            
+
         return url
 
     def upload_file_to_sandbox(self, sandbox_id: str, local_file_path: str, dest_path: str = "/app/results") -> dict:

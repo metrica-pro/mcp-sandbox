@@ -2,9 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install basic tools
+# Install basic tools and matplotlib system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
+    libfreetype6-dev \
+    libpng-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv

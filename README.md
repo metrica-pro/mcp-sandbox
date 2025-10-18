@@ -27,8 +27,11 @@ Python MCP Sandbox is an interactive Python code execution tool that allows user
 ## Features
 
 - 🐳 **Docker Isolation**: Securely run Python code in isolated Docker containers
-- 📦 **Package Management**: Easily install and manage Python packages
+- 📦 **Package Management**: Easily install and manage Python packages with support for custom PyPI mirrors
 - 📊 **File Generation**: Support for generating files and accessing them via web links
+- 🔐 **Authentication**: Optional API key-based authentication for multi-user environments
+- 🎨 **Web UI**: Built-in web interface for managing sandboxes and viewing execution results
+- 🌐 **SSE Support**: Real-time communication via Server-Sent Events for MCP integration
 
 ## Installation
 
@@ -37,6 +40,7 @@ Python MCP Sandbox is an interactive Python code execution tool that allows user
 git clone https://github.com/JohanLi233/python-mcp-sandbox.git
 cd python-mcp-sandbox
 
+# Install dependencies using uv
 uv venv
 uv sync
 
@@ -44,7 +48,17 @@ uv sync
 uv run main.py
 ```
 
-The default SSE endpoint is http://localhost:8000/sse, and you can interact with it via the MCP Inspector through SSE or any other client that supports SSE connections.
+The default SSE endpoint is http://127.0.0.1:8181/sse, and you can interact with it via the MCP Inspector through SSE or any other client that supports SSE connections.
+
+## Configuration
+
+The server configuration can be customized in [config.toml](config.toml):
+
+- **Host**: Default is `127.0.0.1` (localhost only)
+- **Port**: Default is `8181`
+- **PyPI Mirror**: Configure your preferred Python package index mirror
+
+To allow external access, change the host to `0.0.0.0` in the configuration file.
 
 ### Available Tools
 
@@ -120,14 +134,27 @@ Remember not to use plt.show() in your Python code. For visualizations:
 
 ## MCP Example Config
 
-Below is an example config for claude:
+Below is an example config for Claude Desktop:
 
 ```json
 {
   "mcpServers": {
     "mcpSandbox": {
       "command": "npx",
-      "args": ["-y", "supergateway", "--sse",  "http://localhost:8000/sse"]
+      "args": ["-y", "supergateway", "--sse",  "http://127.0.0.1:8181/sse"]
+    }
+  }
+}
+```
+
+If authentication is enabled, include the API key:
+
+```json
+{
+  "mcpServers": {
+    "mcpSandbox": {
+      "command": "npx",
+      "args": ["-y", "supergateway", "--sse",  "http://127.0.0.1:8181/sse?api_key=<YOUR_API_KEY>"]
     }
   }
 }

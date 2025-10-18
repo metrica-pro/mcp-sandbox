@@ -449,3 +449,6 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/pycharm,visualstudiocode,node,python
+.work_logs.sh
+.docker_build_info
+

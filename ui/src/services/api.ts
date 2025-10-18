@@ -1,20 +1,21 @@
-import axios from 'axios';
+import axios from "axios";
 
-const API_URL = 'http://localhost:8000';
+// Use environment variable if available, otherwise use relative path for production
+const API_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
 const api = axios.create({
   baseURL: API_URL,
   headers: {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   },
 });
 
 // Add a request interceptor to include the auth token in all requests
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem("token");
     if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`;
+      config.headers["Authorization"] = `Bearer ${token}`;
     }
     return config;
   },
@@ -52,34 +53,34 @@ export interface RegisterCredentials {
 export const authApi = {
   login: async (credentials: LoginCredentials) => {
     const formData = new URLSearchParams();
-    formData.append('username', credentials.username);
-    formData.append('password', credentials.password);
-    
-    const response = await api.post('/api/token', formData, {
+    formData.append("username", credentials.username);
+    formData.append("password", credentials.password);
+
+    const response = await api.post("/api/token", formData, {
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        "Content-Type": "application/x-www-form-urlencoded",
       },
     });
     return response.data;
   },
-  
+
   register: async (credentials: RegisterCredentials) => {
-    const response = await api.post('/api/register', credentials);
+    const response = await api.post("/api/register", credentials);
     return response.data;
   },
-  
+
   getCurrentUser: async () => {
-    const response = await api.get('/api/users/me');
+    const response = await api.get("/api/users/me");
     return response.data as User;
   },
-  
+
   getApiKey: async () => {
-    const response = await api.get('/api/users/me/api-key');
+    const response = await api.get("/api/users/me/api-key");
     return response.data;
   },
-  
+
   regenerateApiKey: async () => {
-    const response = await api.post('/api/users/me/api-key/regenerate');
+    const response = await api.post("/api/users/me/api-key/regenerate");
     return response.data;
   },
 };
@@ -87,28 +88,28 @@ export const authApi = {
 // Sandbox API
 export const sandboxApi = {
   getUserSandboxes: async () => {
-    const response = await api.get('/api/users/me/sandboxes');
+    const response = await api.get("/api/users/me/sandboxes");
     return response.data.sandboxes as Sandbox[];
   },
-  
+
   createSandbox: async (name?: string) => {
-    const response = await api.post('/api/users/me/sandboxes', { name });
+    const response = await api.post("/api/users/me/sandboxes", { name });
     return response.data;
   },
-  
+
   deleteSandbox: async (sandboxId: string) => {
     const response = await api.delete(`/api/users/me/sandboxes/${sandboxId}`);
     return response.data;
   },
-  
+
   getSandboxDetails: async (sandboxId: string) => {
     const response = await api.get(`/api/users/me/sandboxes/${sandboxId}`);
     return response.data;
   },
-  
+
   getSseUrl: (apiKey: string) => {
     return `${API_URL}/sse?api_key=${apiKey}`;
-  }
+  },
 };
 
 export default api;
