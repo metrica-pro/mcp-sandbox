@@ -27,4 +27,4 @@ format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 log_file = "mcp_sandbox.log"
 
 [mirror]
-pypi_index_url = "http://localhost:3141/root/pypi/+simple/"
+pypi_index_url = "https://mirrors.aliyun.com/pypi/simple/"

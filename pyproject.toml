@@ -20,9 +20,8 @@ dependencies = [
 mcp-sandbox = "main:main"
 
 [tool.uv]
-index-url = "http://localhost:3141/root/pypi/+simple/"
+index-url = "https://mirrors.aliyun.com/pypi/simple/"
 extra-index-url = [
-    "https://mirrors.aliyun.com/pypi/simple/",
     "https://pypi.mirrors.ustc.edu.cn/simple/",
     "https://pypi.doubanio.com/simple/",
     "https://pypi.org/simple"
