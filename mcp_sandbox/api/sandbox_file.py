@@ -10,15 +10,21 @@ import mimetypes
 
 router = APIRouter()
 
+
 class APISandboxManager(SandboxManager, SandboxFileOpsMixin):
     pass
 
+
 sandbox_manager = APISandboxManager()
+
 
 @router.get("/sandbox/file")
 def get_sandbox_file(
     sandbox_id: str = Query(..., description="Sandbox ID"),
-    file_path: str = Query(..., description="Absolute path to the file inside the sandbox, e.g. /app/results/foo.txt")
+    file_path: str = Query(
+        ...,
+        description="Absolute path to the file inside the sandbox, e.g. /app/results/foo.txt",
+    ),
 ):
     """
     Read-only access to files inside a running sandbox.
@@ -27,13 +33,19 @@ def get_sandbox_file(
     try:
         container, error = sandbox_manager.get_container_by_sandbox_id(sandbox_id)
         if error:
-            logger.error(f"Failed to get container for sandbox {sandbox_id}: {error['message']}")
-            raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
-            
+            logger.error(
+                f"Failed to get container for sandbox {sandbox_id}: {error['message']}"
+            )
+            raise HTTPException(
+                status_code=404, detail=f"Sandbox not found: {sandbox_id}"
+            )
+
         if not container:
             logger.error(f"No container found for sandbox {sandbox_id}")
-            raise HTTPException(status_code=404, detail=f"Container not found for sandbox: {sandbox_id}")
-            
+            raise HTTPException(
+                status_code=404, detail=f"Container not found for sandbox: {sandbox_id}"
+            )
+
         stream, stat = container.get_archive(file_path)
         tar_bytes = io.BytesIO(b"".join(stream))
         with tarfile.open(fileobj=tar_bytes) as tar:
@@ -44,7 +56,9 @@ def get_sandbox_file(
             member = next((m for m in members if m.name == rel_path), None)
             if member is None:
                 basename = os.path.basename(file_path)
-                member = next((m for m in members if m.name.endswith(basename)), members[0])
+                member = next(
+                    (m for m in members if m.name.endswith(basename)), members[0]
+                )
             fileobj = tar.extractfile(member)
             if not fileobj:
                 raise HTTPException(status_code=404, detail="File not found in sandbox")
@@ -54,4 +68,6 @@ def get_sandbox_file(
             return StreamingResponse(fileobj, media_type=mime_type, headers=headers)
     except Exception as e:
         logger.error(f"Failed to fetch file from sandbox {sandbox_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching file from sandbox: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching file from sandbox: {e}"
+        )

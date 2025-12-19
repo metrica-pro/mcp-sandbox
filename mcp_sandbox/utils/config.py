@@ -36,7 +36,9 @@ try:
         config = tomli.load(f)
     logging.info(f"Loaded configuration from {CONFIG_FILE}")
 except (FileNotFoundError, tomli.TOMLDecodeError) as e:
-    logging.warning(f"Could not load configuration file: {e}. Using default configuration.")
+    logging.warning(
+        f"Could not load configuration file: {e}. Using default configuration."
+    )
     config = DEFAULT_CONFIG
 
 # Extract configuration values
@@ -60,6 +62,7 @@ logger.setLevel(getattr(logging, config["logging"]["level"]))
 logger.propagate = False
 formatter = logging.Formatter(config["logging"]["format"])
 
+
 # Color formatter for console logs
 class ColorFormatter(logging.Formatter):
     COLOR_MAP = {
@@ -75,6 +78,7 @@ class ColorFormatter(logging.Formatter):
         msg = super().format(record)
         color = self.COLOR_MAP.get(record.levelno, self.RESET_SEQ)
         return f"{color}{msg}{self.RESET_SEQ}"
+
 
 # Console handler
 console_handler = logging.StreamHandler()

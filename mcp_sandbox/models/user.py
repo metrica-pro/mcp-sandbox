@@ -26,9 +26,7 @@ class User(UserBase):
     is_active: bool
     api_key: Optional[str] = None
 
-    model_config = {
-        "from_attributes": True
-    }
+    model_config = {"from_attributes": True}
 
 
 class Token(BaseModel):
