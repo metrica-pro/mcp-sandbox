@@ -65,6 +65,9 @@ SAFE_ENV_VARS: set[str] = {
     "TEMP",
     "USER",
     "LOGNAME",
+    # External API keys (read from .env / K8s secrets)
+    "YANDEX_API_KEY",
+    "YANDEX_FOLDER_ID",
 }
 
 

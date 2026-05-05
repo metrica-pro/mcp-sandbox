@@ -12,6 +12,30 @@ from pathlib import Path
 import httpx
 import pytest
 
+# ── Load .env file (without python-dotenv dependency) ────────────────────
+
+
+def _load_dotenv() -> None:
+    """Load .env file into os.environ (simple parser, no dependency)."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv()
+
 
 def _find_free_port() -> int:
     """Find a free TCP port on localhost."""
