@@ -3,7 +3,11 @@
 Provides a single MCP tool ``execute_code`` that runs Python, JavaScript
 or Bash code inside the current process (no Docker). Isolation is
 expected to be enforced at the K8s pod level (securityContext, limits).
+
+Streamable HTTP 2025 (POST /sse) — compatible with LobeChat, Claude, Cursor.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextlib
@@ -14,14 +18,14 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TypedDict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 
-from mcp_sandbox.api.routes import configure_app
 from mcp_sandbox.utils.config import HOST, PORT, logger
 
 # ── Constants ────────────────────────────────────────────────────────────
@@ -70,6 +74,20 @@ SAFE_ENV_VARS: set[str] = {
     "YANDEX_FOLDER_ID",
     "MINIMAX_API_KEY",
 }
+
+# ── Authentication ───────────────────────────────────────────────────────
+
+API_TOKEN: str | None = os.environ.get("API_TOKEN")
+
+_auth_required: bool = bool(API_TOKEN)
+
+if _auth_required:
+    logger.info("API_TOKEN configured — Bearer token authentication enabled")
+else:
+    logger.warning(
+        "API_TOKEN not set — endpoint is OPEN (no authentication). "
+        "Set API_TOKEN env var to enable Bearer token auth."
+    )
 
 
 # ── Type definitions ─────────────────────────────────────────────────────
@@ -267,26 +285,74 @@ async def execute_code(language: str, code: str) -> ExecutionResult:
 # ── FastAPI application ──────────────────────────────────────────────────
 
 
+# ── Build ASGI app (MCP http_app as base, extended with auth/health) ─────
+
+# Get the MCP Streamable HTTP app (Starlette)
+mcp_app = mcp.http_app(transport="streamable-http", path="/sse")
+
+# Merge lifespans: our cron killer + MCP session manager
+_original_mcp_lifespan = mcp_app.router.lifespan_context
+
+
 @contextlib.asynccontextmanager
-async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Start background tasks on server startup, stop on shutdown."""
-    # Start the hung-process cron killer
+async def merged_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Start cron killer, then MCP session manager."""
+    # Start cron killer
     killer_task = asyncio.create_task(_hung_process_killer())
     logger.info(
         "Background cron killer started (interval=%ss, hard_timeout=%ss)",
         CRON_INTERVAL,
         HARD_TIMEOUT,
     )
-    yield
-    # Shutdown
+    # Start MCP session manager
+    async with _original_mcp_lifespan(mcp_app):
+        yield
+    # Shutdown cron killer
     killer_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await killer_task
     logger.info("Background cron killer stopped")
 
 
-app = FastAPI(title="MCP Sandbox", lifespan=lifespan)
+# Create FastAPI app with merged lifespan
+app = FastAPI(title="MCP Sandbox", lifespan=merged_lifespan)
 
+# ── Auth middleware ───────────────────────────────────────────────────────
+
+
+@app.middleware("http")
+async def auth_middleware(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Validate Bearer token if API_TOKEN is configured.
+
+    /health is exempt from authentication.
+    """
+    if request.url.path == "/health":
+        return await call_next(request)
+
+    if _auth_required:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Missing or malformed Authorization header. "
+                    "Use: Authorization: Bearer <token>"
+                },
+            )
+        token = auth_header.removeprefix("Bearer ")
+        if API_TOKEN and token != API_TOKEN:
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Invalid API token"},
+            )
+
+    return await call_next(request)
+
+
+# CORS (required for browser-based MCP clients like LobeChat)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -294,13 +360,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Wire up SSE transport and /health endpoint
-configure_app(app, mcp._mcp_server)  # noqa: SLF001 — upstream API gap
 
-logger.info("MCP Sandbox starting on %s:%s", HOST, PORT)
+# Health check (no auth required)
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-# ── Entry point ──────────────────────────────────────────────────────
+# ── Mount MCP app ────────────────────────────────────────────────────────
+
+# Mount the MCP Streamable HTTP app at root.
+# The merged lifespan ensures the MCP session manager is initialized.
+app.mount("/", mcp_app)
+
+
+logger.info(
+    "MCP Sandbox starting on %s:%s (auth=%s, transport=streamable-http)",
+    HOST,
+    PORT,
+    "on" if _auth_required else "off",
+)
+
+
+# ── Entry point ──────────────────────────────────────────────────────────
 
 
 def main() -> None:

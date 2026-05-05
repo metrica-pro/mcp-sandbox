@@ -154,15 +154,16 @@ class TestYandexSearchViaMCP:
     async def test_search_via_mcp(self, sandbox_server: str):
         """Connect via SSE, call execute_code with the Yandex search script."""
         from mcp import ClientSession
-        from mcp.client.sse import sse_client
+        from mcp.client.streamable_http import streamablehttp_client
 
         if "YANDEX_API_KEY" not in os.environ:
             pytest.skip("YANDEX_API_KEY not set in environment")
 
-        async with (
-            sse_client(f"{sandbox_server}/sse") as (read, write),
-            ClientSession(read, write) as session,
-        ):
+        async with streamablehttp_client(f"{sandbox_server}/sse") as (
+            read,
+            write,
+            _,
+        ), ClientSession(read, write) as session:
             await session.initialize()
 
             result = await session.call_tool(
@@ -173,16 +174,15 @@ class TestYandexSearchViaMCP:
                 },
             )
 
-            raw_output = result.content[0].text if result.content else ""
-            assert raw_output, "Empty output from MCP execute_code"
+            output = result.content[0].text if result.content else ""
+            assert output, "Empty output from MCP execute_code"
 
-            # MCP returns the full ExecutionResult as text (JSON with stdout/stderr/exit_code)
+            # MCP returns the full ExecutionResult as text
             try:
-                exec_result = json.loads(raw_output)
+                exec_result = json.loads(output)
             except json.JSONDecodeError as e:
-                pytest.fail(f"Invalid MCP result JSON: {e}\nRaw:\n{raw_output}")
+                pytest.fail(f"Invalid MCP result JSON: {e}\nRaw:\n{output}")
 
-            # Extract the actual stdout (which contains the search script output)
             stdout_text = exec_result.get("stdout", "")
             if exec_result.get("error"):
                 pytest.fail(f"MCP execution error: {exec_result['error']}")

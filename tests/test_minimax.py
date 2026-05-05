@@ -214,17 +214,18 @@ class TestMinimaxViaMCP:
 
     @pytest.mark.asyncio
     async def test_chat_via_mcp(self, sandbox_server: str):
-        """Connect via SSE, call execute_code with the MiniMax chat script."""
+        """Connect via Streamable HTTP, call execute_code with MiniMax chat."""
         from mcp import ClientSession
-        from mcp.client.sse import sse_client
+        from mcp.client.streamable_http import streamablehttp_client
 
         if "MINIMAX_API_KEY" not in os.environ:
             pytest.skip("MINIMAX_API_KEY not set in environment")
 
-        async with (
-            sse_client(f"{sandbox_server}/sse") as (read, write),
-            ClientSession(read, write) as session,
-        ):
+        async with streamablehttp_client(f"{sandbox_server}/sse") as (
+            read,
+            write,
+            _,
+        ), ClientSession(read, write) as session:
             await session.initialize()
 
             result = await session.call_tool(
@@ -235,7 +236,6 @@ class TestMinimaxViaMCP:
             raw_output = result.content[0].text if result.content else ""
             assert raw_output, "Empty output from MCP"
 
-            # Parse ExecutionResult wrapper
             exec_result = json.loads(raw_output)
             if exec_result.get("error"):
                 pytest.fail(f"MCP exec error: {exec_result['error']}")
@@ -243,7 +243,6 @@ class TestMinimaxViaMCP:
             stdout_text = exec_result.get("stdout", "")
             data = json.loads(stdout_text)
 
-            # Handle auth/balance gracefully
             if "http_error" in data:
                 code = data["http_error"]
                 print(f"\n⚠️  MiniMax HTTP {code} via MCP — round-trip OK")
@@ -263,15 +262,16 @@ class TestMinimaxViaMCP:
     async def test_reasoning_via_mcp(self, sandbox_server: str):
         """Reasoning mode through MCP."""
         from mcp import ClientSession
-        from mcp.client.sse import sse_client
+        from mcp.client.streamable_http import streamablehttp_client
 
         if "MINIMAX_API_KEY" not in os.environ:
             pytest.skip("MINIMAX_API_KEY not set in environment")
 
-        async with (
-            sse_client(f"{sandbox_server}/sse") as (read, write),
-            ClientSession(read, write) as session,
-        ):
+        async with streamablehttp_client(f"{sandbox_server}/sse") as (
+            read,
+            write,
+            _,
+        ), ClientSession(read, write) as session:
             await session.initialize()
 
             result = await session.call_tool(

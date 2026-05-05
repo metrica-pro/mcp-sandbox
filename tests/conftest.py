@@ -56,6 +56,8 @@ def sandbox_server():
     env["APP_PORT"] = str(port)
     env["APP_HOST"] = "127.0.0.1"
     env["LOG_LEVEL"] = "ERROR"  # quieter tests
+    # Don't set API_TOKEN for tests (auth off) unless explicitly testing auth
+    env.pop("API_TOKEN", None)
 
     project_root = Path(__file__).resolve().parent.parent
     proc = subprocess.Popen(
