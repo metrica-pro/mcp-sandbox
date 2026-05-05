@@ -1,30 +1,23 @@
 [server]
-# Server configuration
 host = "0.0.0.0"
 port = 8181
 
 [auth]
 require_auth = false
-# Default user ID when authentication is disabled
 default_user_id = "root"
-# Maximum number of sandboxes a user can create
 user_sandbox_limit = 3
 
 [docker]
-# Default Docker image name
-default_image = "python-sandbox:latest"
-# Dockerfile path
+# Pull sandbox runtime image from GHCR (pre-built by CI, not built at runtime)
+default_image = "ghcr.io/metrica-pro/mcp-sandbox-python:latest"
 dockerfile_path = "sandbox_images/Dockerfile"
-# Whether to check for Dockerfile changes and rebuild if needed
-check_dockerfile_changes = true
-# File to store last build information
+check_dockerfile_changes = false
 build_info_file = ".docker_build_info"
 
 [logging]
-# Logging configuration
 level = "INFO"
 format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 log_file = "mcp_sandbox.log"
 
 [mirror]
-pypi_index_url = "https://mirrors.aliyun.com/pypi/simple/"
+pypi_index_url = "https://pypi.org/simple/"
