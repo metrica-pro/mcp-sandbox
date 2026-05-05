@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir uv
 
 # Copy dependency files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
-# Install Python dependencies
-# Override index-url to avoid Chinese mirrors (broken on GitHub Actions)
-RUN uv sync --frozen --no-dev --index-url https://pypi.org/simple/
+# Install Python dependencies (uv resolves from scratch,
+# uv.lock is stale from upstream Chinese mirrors)
+RUN uv sync --no-dev
 
 # Copy application code
 COPY main.py config.toml ./
