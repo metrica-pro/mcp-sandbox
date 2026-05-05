@@ -221,11 +221,14 @@ class TestMinimaxViaMCP:
         if "MINIMAX_API_KEY" not in os.environ:
             pytest.skip("MINIMAX_API_KEY not set in environment")
 
-        async with streamablehttp_client(f"{sandbox_server}/sse") as (
-            read,
-            write,
-            _,
-        ), ClientSession(read, write) as session:
+        async with (
+            streamablehttp_client(f"{sandbox_server}/sse") as (
+                read,
+                write,
+                _,
+            ),
+            ClientSession(read, write) as session,
+        ):
             await session.initialize()
 
             result = await session.call_tool(
@@ -267,11 +270,14 @@ class TestMinimaxViaMCP:
         if "MINIMAX_API_KEY" not in os.environ:
             pytest.skip("MINIMAX_API_KEY not set in environment")
 
-        async with streamablehttp_client(f"{sandbox_server}/sse") as (
-            read,
-            write,
-            _,
-        ), ClientSession(read, write) as session:
+        async with (
+            streamablehttp_client(f"{sandbox_server}/sse") as (
+                read,
+                write,
+                _,
+            ),
+            ClientSession(read, write) as session,
+        ):
             await session.initialize()
 
             result = await session.call_tool(
