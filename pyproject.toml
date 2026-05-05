@@ -1,19 +1,23 @@
 [project]
 name = "mcp-sandbox"
-version = "0.4.0"
+version = "0.4.1"
 description = "Lightweight MCP code execution sandbox"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115.12",
-    "fastmcp>=2.2.0",
+    "fastapi>=0.136.0",
+    "fastmcp>=3.2.0",
     "uvicorn>=0.34.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "bandit>=1.9.0",
+    "deptry>=0.21.0",
     "httpx>=0.28.0",
     "mypy>=1.14.0",
+    "pip-audit>=2.7.0",
+    "pre-commit>=3.7.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.9.0",
@@ -49,6 +53,21 @@ ignore = ["B008", "S101"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
+skips = ["B101", "B104", "B108", "B404", "B603"]
+# B101: assert used in tests/prod-safety
+# B104: bind 0.0.0.0 — required for K8s pod networking
+# B108: /tmp usage — standard in container, per-request mktemp already used
+# B404: subprocess import — by design (this IS a code-execution sandbox)
+# B603: subprocess without shell=True — intentional, list-args are safer than shell strings
+
+[tool.deptry]
+optional_dependencies_dev_groups = ["dev"]
+
+[tool.deptry.per_rule_ignores]
+DEP003 = ["mcp"]  # mcp is a transitive dep of fastmcp
 
 [tool.mypy]
 python_version = "3.12"
