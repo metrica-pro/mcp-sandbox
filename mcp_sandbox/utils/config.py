@@ -1,70 +1,22 @@
 import logging
 import os
-import tomli
-from pathlib import Path
 
-# Load configuration from TOML file
-CONFIG_FILE = Path("config.toml").resolve()
+# Server configuration (override via environment variables)
+HOST = os.environ.get("APP_HOST", "0.0.0.0")
+PORT = int(os.environ.get("APP_PORT", "8181"))
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-# Default configuration if file doesn't exist
-DEFAULT_CONFIG = {
-    "server": {
-        "host": "127.0.0.1",
-        "port": 8181,
-    },
-    "auth": {
-        "require_auth": False,
-        "default_user_id": "root",
-        "user_sandbox_limit": 3,
-    },
-    "docker": {
-        "default_image": "python-sandbox:latest",
-        "dockerfile_path": "sandbox_images/Dockerfile",
-        "check_dockerfile_changes": True,
-        "build_info_file": ".docker_build_info",
-    },
-    "logging": {
-        "level": "INFO",
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        "log_file": "mcp_sandbox.log",
-    },
-}
-
-# Load configuration
-try:
-    with open(CONFIG_FILE, "rb") as f:
-        config = tomli.load(f)
-    logging.info(f"Loaded configuration from {CONFIG_FILE}")
-except (FileNotFoundError, tomli.TOMLDecodeError) as e:
-    logging.warning(
-        f"Could not load configuration file: {e}. Using default configuration."
-    )
-    config = DEFAULT_CONFIG
-
-# Extract configuration values
-HOST = os.environ.get("APP_HOST", config["server"]["host"])
-PORT = int(os.environ.get("APP_PORT", config["server"]["port"]))
-DEFAULT_DOCKER_IMAGE = config["docker"]["default_image"]
-
-# Auth configuration
-REQUIRE_AUTH = config.get("auth", {}).get("require_auth", False)
-DEFAULT_USER_ID = config.get("auth", {}).get("default_user_id", "root")
-USER_SANDBOX_LIMIT = config.get("auth", {}).get("user_sandbox_limit", 3)
-
-PYPI_INDEX_URL = config["mirror"]["pypi_index_url"]
-
-# Base URL for file access
-BASE_URL = f"http://{HOST}:{PORT}/static/"
-
-# Configure logging for MCP_SANDBOX
+# Configure logging
 logger = logging.getLogger("MCP_SANDBOX")
-logger.setLevel(getattr(logging, config["logging"]["level"]))
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 logger.propagate = False
-formatter = logging.Formatter(config["logging"]["format"])
+
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-# Color formatter for console logs
 class ColorFormatter(logging.Formatter):
+    """Color formatter for console logs."""
+
     COLOR_MAP = {
         logging.DEBUG: "\033[37m",
         logging.INFO: "\033[32m",
@@ -80,12 +32,8 @@ class ColorFormatter(logging.Formatter):
         return f"{color}{msg}{self.RESET_SEQ}"
 
 
-# Console handler
 console_handler = logging.StreamHandler()
-console_handler.setFormatter(ColorFormatter(config["logging"]["format"]))
-# File handler
-file_handler = logging.FileHandler(config["logging"]["log_file"])
-file_handler.setFormatter(formatter)
-# Attach handlers
+console_handler.setFormatter(
+    ColorFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
 logger.addHandler(console_handler)
-logger.addHandler(file_handler)

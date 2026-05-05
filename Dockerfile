@@ -1,26 +1,22 @@
 FROM python:3.12-slim
 
-WORKDIR /app
-
-# System dependencies
+# Node.js + bash (for execute_code runtimes)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    nodejs curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
 
 # Install uv for package management
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files
-COPY pyproject.toml ./
-
-# Install Python dependencies (uv resolves from scratch,
-# uv.lock is stale from upstream Chinese mirrors)
+# Install Python dependencies
+COPY pyproject.toml .
 RUN uv sync --no-dev
 
 # Copy application code
-COPY main.py config.toml ./
+COPY main.py ./
 COPY mcp_sandbox/ ./mcp_sandbox/
-COPY sandbox_images/ ./sandbox_images/
 
 # MCP SSE endpoint
 EXPOSE 8181

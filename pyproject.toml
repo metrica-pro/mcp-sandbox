@@ -1,19 +1,13 @@
 [project]
 name = "mcp-sandbox"
-version = "0.1.0"
-description = "Safe sandboxes for llms"
+version = "0.2.0"
+description = "Lightweight MCP code execution sandbox"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "docker>=7.1.0",
     "fastapi>=0.115.12",
     "fastmcp>=2.2.0",
-    "passlib[bcrypt]>=1.7.4",
-    "pydantic[email]>=2.11.3",
-    "python-jose[cryptography]>=3.4.0",
-    "python-multipart>=0.0.20",
-    "ruff>=0.11.6",
-    "tomli>=2.2.1",
+    "uvicorn>=0.34.0",
 ]
 
 [project.scripts]

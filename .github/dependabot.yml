@@ -1,21 +1,10 @@
 version: 2
 updates:
-  # Check for updates to Python packages
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-      
-  # Check for updates to UI dependencies (npm/pnpm)
-  - package-ecosystem: "npm"
-    directory: "/ui"
-    schedule:
-      interval: "daily"
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore"
       include: "scope"
