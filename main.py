@@ -68,6 +68,7 @@ SAFE_ENV_VARS: set[str] = {
     # External API keys (read from .env / K8s secrets)
     "YANDEX_API_KEY",
     "YANDEX_FOLDER_ID",
+    "MINIMAX_API_KEY",
 }
 
 
