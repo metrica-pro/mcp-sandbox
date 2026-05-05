@@ -9,8 +9,12 @@ import asyncio
 import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
+import time
+from collections.abc import AsyncIterator
 from typing import TypedDict
 
 from fastapi import FastAPI
@@ -36,6 +40,18 @@ MAX_CODE_LENGTH: int = 1_000_000
 
 # Maximum concurrent executions
 MAX_CONCURRENT_EXECUTIONS: int = 10
+
+# Execution timeout — SIGTERM sent after this many seconds
+EXECUTION_TIMEOUT: int = 30
+
+# Grace period after SIGTERM before sending SIGKILL
+KILL_GRACE_PERIOD: int = 2
+
+# Hard deadline — if process still alive after this, background cron kills it
+HARD_TIMEOUT: int = EXECUTION_TIMEOUT + KILL_GRACE_PERIOD + 5
+
+# Background killer interval (seconds)
+CRON_INTERVAL: int = 15
 
 # Safe environment variables to pass through to subprocess
 SAFE_ENV_VARS: set[str] = {
@@ -70,6 +86,55 @@ mcp = FastMCP("Code Sandbox")
 
 # Semaphore to limit concurrent executions
 _execution_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXECUTIONS)
+
+# ── Process tracking for hung-process killer ─────────────────────────────
+
+# Tracks running subprocesses: {pid: (start_time, pgid)}
+_running_procs: dict[int, tuple[float, int]] = {}
+_running_procs_lock = threading.Lock()
+
+
+def _track_process(pid: int, pgid: int) -> None:
+    """Register a running subprocess for the background killer."""
+    with _running_procs_lock:
+        _running_procs[pid] = (time.monotonic(), pgid)
+
+
+def _untrack_process(pid: int) -> None:
+    """Remove a process from tracking (called on normal completion)."""
+    with _running_procs_lock:
+        _running_procs.pop(pid, None)
+
+
+async def _hung_process_killer() -> None:
+    """Background task that periodically kills hung processes.
+
+    Checks immediately on first tick, then every ``CRON_INTERVAL`` seconds.
+    Any tracked process that has been running longer than ``HARD_TIMEOUT``
+    gets a SIGKILL delivered to its entire process group.
+    """
+    first_tick = True
+    while True:
+        if first_tick:
+            first_tick = False
+        else:
+            await asyncio.sleep(CRON_INTERVAL)
+        now = time.monotonic()
+        with _running_procs_lock:
+            stale_pids: list[tuple[int, int]] = []
+            for pid, (start, pgid) in list(_running_procs.items()):
+                if now - start >= HARD_TIMEOUT:
+                    stale_pids.append((pid, pgid))
+            for pid, pgid in stale_pids:
+                logger.warning(
+                    "Cron killer: pid=%s pgid=%s hung for >%ss — sending SIGKILL",
+                    pid,
+                    pgid,
+                    HARD_TIMEOUT,
+                )
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    os.killpg(pgid, signal.SIGKILL)
+                _running_procs.pop(pid, None)
 
 
 def _build_env() -> dict[str, str]:
@@ -122,26 +187,63 @@ def _execute_sync(language: str, code: str) -> ExecutionResult:
 
         env = _build_env()
 
-        result = subprocess.run(
+        # Use Popen for fine-grained timeout control:
+        #   1. SIGTERM to process group after EXECUTION_TIMEOUT
+        #   2. SIGKILL after KILL_GRACE_PERIOD (non-ignorable)
+        #   3. start_new_session=True → new pgid, children killed too
+        proc = subprocess.Popen(
             RUNNERS[language] + [tmp_file_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=30,
             cwd=tmp_dir,
             env=env,
+            start_new_session=True,
         )
-        return ExecutionResult(
-            stdout=result.stdout[:10000],
-            stderr=result.stderr[:5000],
-            exit_code=result.returncode,
-        )
-    except subprocess.TimeoutExpired:
-        return ExecutionResult(error="Execution timeout after 30s")
-    except FileNotFoundError:
-        return ExecutionResult(error=f"Runtime '{RUNNERS[language][0]}' not found on PATH")
-    except OSError as exc:
-        logger.exception("Execution failed for language=%s", language)
-        return ExecutionResult(error=f"Execution error: {exc}")
+
+        # Register for background cron killer
+        _track_process(proc.pid, proc.pid)
+
+        try:
+            stdout_str, stderr_str = proc.communicate(timeout=EXECUTION_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Phase 1: SIGTERM to the entire process group
+            logger.warning(
+                "Timeout %ss — SIGTERM pgid=%s",
+                EXECUTION_TIMEOUT,
+                proc.pid,
+            )
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGTERM)
+
+            try:
+                stdout_str, stderr_str = proc.communicate(timeout=KILL_GRACE_PERIOD)
+            except subprocess.TimeoutExpired:
+                # Phase 2: SIGKILL — guaranteed kill
+                logger.warning(
+                    "Process pgid=%s survived SIGTERM — SIGKILL",
+                    proc.pid,
+                )
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                stdout_str, stderr_str = proc.communicate()
+
+            _untrack_process(proc.pid)
+            return ExecutionResult(error="Execution timeout after 30s")
+        except FileNotFoundError:
+            _untrack_process(proc.pid)
+            return ExecutionResult(error=f"Runtime '{RUNNERS[language][0]}' not found on PATH")
+        except OSError as exc:
+            _untrack_process(proc.pid)
+            logger.exception("Execution failed for language=%s", language)
+            return ExecutionResult(error=f"Execution error: {exc}")
+        else:
+            _untrack_process(proc.pid)
+            return ExecutionResult(
+                stdout=(stdout_str or "")[:10000],
+                stderr=(stderr_str or "")[:5000],
+                exit_code=proc.returncode,
+            )
     finally:
         with contextlib.suppress(OSError):
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -160,7 +262,26 @@ async def execute_code(language: str, code: str) -> ExecutionResult:
 
 # ── FastAPI application ──────────────────────────────────────────────────
 
-app = FastAPI(title="MCP Sandbox")
+
+@contextlib.asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Start background tasks on server startup, stop on shutdown."""
+    # Start the hung-process cron killer
+    killer_task = asyncio.create_task(_hung_process_killer())
+    logger.info(
+        "Background cron killer started (interval=%ss, hard_timeout=%ss)",
+        CRON_INTERVAL,
+        HARD_TIMEOUT,
+    )
+    yield
+    # Shutdown
+    killer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await killer_task
+    logger.info("Background cron killer stopped")
+
+
+app = FastAPI(title="MCP Sandbox", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
