@@ -4,13 +4,35 @@ This module provides ``configure_app`` which wires up the MCP SSE
 transport and a /health liveness probe onto an existing FastAPI app.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from fastapi import FastAPI, Request, Response
 from mcp.server.sse import SseServerTransport
 
 from mcp_sandbox.utils.config import logger
 
 
-def configure_app(app: FastAPI, mcp_server) -> SseServerTransport:
+def _get_asgi_send(request: Request) -> Any:
+    """Extract the ASGI send callable from a Starlette/FastAPI Request.
+
+    Accessing ``request._send`` is a known workaround for the MCP SSE
+    transport which expects raw ASGI primitives.  The underscore prefix
+    denotes a private API — if Starlette changes this, the guard below
+    will surface the problem at runtime instead of failing silently.
+    """
+    send: Any = getattr(request, "_send", None)
+    if send is None:
+        raise RuntimeError(
+            "Cannot extract ASGI send callable from Request. "
+            "The Starlette API may have changed — the SSE transport "
+            "needs to be updated accordingly."
+        )
+    return send
+
+
+def configure_app(app: FastAPI, mcp_server: Any) -> None:
     """Attach SSE and health routes to *app*.
 
     Parameters
@@ -19,13 +41,7 @@ def configure_app(app: FastAPI, mcp_server) -> SseServerTransport:
         A FastAPI application instance.
     mcp_server:
         The low-level ``mcp.server.Server`` object (``FastMCP._mcp_server``).
-
-    Returns
-    -------
-    SseServerTransport
-        The SSE transport so the caller can mount ``/messages/`` afterwards.
     """
-
     # Server-Sent Events transport
     event_stream = SseServerTransport("/messages/")
 
@@ -35,7 +51,7 @@ def configure_app(app: FastAPI, mcp_server) -> SseServerTransport:
         async with event_stream.connect_sse(
             request.scope,
             request.receive,
-            request._send,  # noqa: SLF001
+            _get_asgi_send(request),
         ) as (read_stream, write_stream):
             await mcp_server.run(
                 read_stream,
@@ -48,7 +64,5 @@ def configure_app(app: FastAPI, mcp_server) -> SseServerTransport:
     app.mount("/messages/", app=event_stream.handle_post_message)
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
-
-    return event_stream

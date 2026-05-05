@@ -1,0 +1,41 @@
+# Version control
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+dist
+build
+.coverage
+htmlcov
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode
+.idea
+.history
+
+# CI / CD
+.github
+
+# Docs
+README.md
+LICENSE
+
+# Tests
+tests
+.pytest_cache
+
+# Docker
+.dockerignore
+Dockerfile

@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - "README.md"
       - ".github/dependabot.yml"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -13,7 +15,50 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run ruff (linter)
+        run: uv run ruff check .
+
+      - name: Run ruff (formatter check)
+        run: uv run ruff format --check .
+
+      - name: Run mypy (type check)
+        run: uv run mypy mcp_sandbox/ main.py --ignore-missing-imports
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -v
+
+      - name: Run smoke test (health check)
+        run: |
+          uv run python -c "
+          import subprocess, time, httpx
+          proc = subprocess.Popen(['uv', 'run', 'python', 'main.py'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          time.sleep(5)
+          try:
+              resp = httpx.get('http://localhost:8181/health', timeout=10)
+              assert resp.status_code == 200, f'Health check failed: {resp.status_code}'
+              assert resp.json() == {'status': 'ok'}, f'Unexpected response: {resp.json()}'
+              print('Smoke test PASSED')
+          finally:
+              proc.terminate()
+              proc.wait()
+          "
+
   build:
+    needs: [test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
