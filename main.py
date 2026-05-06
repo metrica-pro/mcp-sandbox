@@ -463,11 +463,70 @@ def _query_sync(sql: str, data: str | None, data_format: str) -> QueryDataResult
 
 # ── MCP Tools ────────────────────────────────────────────────────────────
 
+EXECUTE_CODE_DESCRIPTION = """\
+Execute Python, JavaScript or Bash code in a sandboxed subprocess.
 
-@mcp.tool(
-    name="execute_code",
-    description=("Execute Python, JavaScript or Bash code. Returns stdout, stderr and exit_code."),
-)
+Runtimes available:
+  python     — Python 3.12 with duckdb library pre-installed (import duckdb)
+  javascript — Node.js
+  bash       — Bash shell
+
+Use this tool when you need to:
+- Run computations, data processing, or algorithms
+- Use duckdb for complex multi-step SQL analysis, file-based operations, or query chains
+  that go beyond a single SELECT (use query_data for simple inline CSV/JSON queries)
+- Make HTTP requests to external APIs (urllib, requests)
+- Read/write files in the temporary sandbox directory
+
+Limits:
+- Code max 1 MB
+- Execution timeout: 30 seconds (SIGTERM → SIGKILL)
+- stdout truncated to 10 000 chars, stderr to 5 000 chars
+- 10 concurrent executions max (shared with query_data)
+
+Available environment variables: YANDEX_API_KEY, YANDEX_FOLDER_ID, MINIMAX_API_KEY
+
+Returns {stdout, stderr, exit_code, error?} — check 'error' field for validation/timeout issues.\
+"""
+
+QUERY_DATA_DESCRIPTION = """\
+Execute a SQL SELECT query on inline CSV/JSON data using DuckDB in-process.
+
+The data is parsed and loaded into an 'input_data' table in a temporary :memory: database.
+Each call creates a fresh database — no state persists between calls.
+
+When to use query_data (simple inline queries):
+- Quick aggregations: COUNT, SUM, AVG, MIN, MAX on inline data
+- Filtering and sorting: WHERE, ORDER BY, LIMIT
+- JOINs on the input_data table (self-join for comparisons)
+- Pure SQL expressions: SELECT 1+1, SELECT random(), SELECT now()
+- Use when data is already in CSV/JSON format and fits in 500KB
+
+When to use execute_code + duckdb instead:
+- Multi-step queries (CREATE TABLE, INSERT, multiple SELECTs)
+- Working with files the agent has written to the sandbox
+- Advanced DuckDB features (macros, window functions over multiple tables)
+- Queries that need to persist intermediate results across steps
+
+Data formats:
+  data_format="csv"  — comma/tab/semicolon-separated with header row
+  data_format="json" — array of objects [{"col":val},...] or single object {"col":val}
+  data_format="auto" — detects by first non-whitespace char ({ or [ → json, else csv)
+
+Security:
+- Only SELECT and WITH ... SELECT queries allowed (regex-validated)
+- Filesystem disabled (disabled_filesystems='LocalFileSystem')
+- Read-only mode (access_mode='read_only')
+- Data parsed via Python stdlib, not DuckDB file readers — path traversal blocked
+- 10 second timeout with interrupt
+
+Limits: SQL max 64KB, data max 500KB, 10 concurrent executions max (shared with execute_code)
+
+Returns {columns, rows, row_count, error?} — check 'error' field for validation/SQL/timeout issues.\
+"""
+
+
+@mcp.tool(name="execute_code", description=EXECUTE_CODE_DESCRIPTION)
 async def execute_code(language: str, code: str) -> ExecutionResult:
     """Run *code* in a subprocess and return the result (async wrapper)."""
     async with _execution_semaphore:
@@ -475,14 +534,7 @@ async def execute_code(language: str, code: str) -> ExecutionResult:
         return await loop.run_in_executor(None, _execute_sync, language, code)
 
 
-@mcp.tool(
-    name="query_data",
-    description=(
-        "Execute a SQL SELECT query on inline CSV/JSON data using DuckDB. "
-        "Data is loaded into an 'input_data' table in a temporary :memory: database. "
-        "If no data is provided, query runs on an empty database."
-    ),
-)
+@mcp.tool(name="query_data", description=QUERY_DATA_DESCRIPTION)
 async def query_data(
     sql: str,
     data: str | None = None,
