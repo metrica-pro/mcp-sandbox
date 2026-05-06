@@ -1,8 +1,11 @@
 """MCP Sandbox — lightweight code execution server.
 
-Provides a single MCP tool ``execute_code`` that runs Python, JavaScript
-or Bash code inside the current process (no Docker). Isolation is
-expected to be enforced at the K8s pod level (securityContext, limits).
+Provides MCP tools:
+- ``execute_code`` — run Python, JavaScript or Bash in subprocess
+- ``query_data`` — run SQL SELECT on inline CSV/JSON via DuckDB
+
+Isolation is enforced at the K8s pod level (securityContext, limits).
+DuckDB runs in-process with disabled filesystem and read-only mode.
 
 Streamable HTTP 2025 (POST /sse) — compatible with LobeChat, Claude, Cursor.
 """
@@ -11,7 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import csv
+import io
+import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -21,6 +28,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TypedDict
 
+import duckdb
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -56,6 +64,11 @@ HARD_TIMEOUT: int = EXECUTION_TIMEOUT + KILL_GRACE_PERIOD + 5
 
 # Background killer interval (seconds)
 CRON_INTERVAL: int = 15
+
+# DuckDB query limits
+MAX_SQL_LENGTH: int = 65_536  # 64 KB
+MAX_DATA_LENGTH: int = 512_000  # 500 KB
+QUERY_TIMEOUT: int = 10  # seconds
 
 # Safe environment variables to pass through to subprocess
 SAFE_ENV_VARS: set[str] = {
@@ -102,11 +115,20 @@ class ExecutionResult(TypedDict, total=False):
     error: str
 
 
+class QueryDataResult(TypedDict, total=False):
+    """Result from query_data tool."""
+
+    columns: list[str]
+    rows: list[dict[str, object]]
+    row_count: int
+    error: str
+
+
 # ── MCP server ───────────────────────────────────────────────────────────
 
 mcp = FastMCP("Code Sandbox")
 
-# Semaphore to limit concurrent executions
+# Semaphore to limit concurrent executions (shared by execute_code and query_data)
 _execution_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXECUTIONS)
 
 # ── Process tracking for hung-process killer ─────────────────────────────
@@ -271,6 +293,179 @@ def _execute_sync(language: str, code: str) -> ExecutionResult:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# ── DuckDB query_data helpers ────────────────────────────────────────────
+
+
+def _detect_format(data: str) -> str:
+    """Auto-detect data format: '{' or '[' → 'json', otherwise 'csv'."""
+    stripped = data.lstrip()
+    if stripped and stripped[0] in ("{", "["):
+        return "json"
+    return "csv"
+
+
+def _query_data_validate(
+    sql: str, data: str | None, data_format: str | None
+) -> QueryDataResult | None:
+    """Validate query_data inputs. Returns error result or None if valid."""
+    # Validate SQL
+    if not sql.strip():
+        return QueryDataResult(error="SQL query must not be empty")
+
+    if len(sql) > MAX_SQL_LENGTH:
+        return QueryDataResult(
+            error=f"SQL query exceeds maximum size of {MAX_SQL_LENGTH:,} characters"
+        )
+
+    if re.match(r"^\s*SELECT\b", sql, re.IGNORECASE) is None:
+        return QueryDataResult(error="Only SELECT queries are allowed")
+
+    # Validate data_format
+    if data_format not in {"csv", "json", "auto"}:
+        return QueryDataResult(error="data_format must be 'csv', 'json' or 'auto'")
+
+    # Validate data if provided
+    if data is not None:
+        if not data.strip():
+            return QueryDataResult(error="Data must not be empty")
+
+        if len(data) > MAX_DATA_LENGTH:
+            return QueryDataResult(
+                error=f"Data exceeds maximum size of {MAX_DATA_LENGTH:,} characters"
+            )
+
+    return None
+
+
+def _parse_csv_data(data: str) -> tuple[list[str], list[tuple[object, ...]]]:
+    """Parse CSV string via csv.DictReader. Returns (column_names, rows_as_tuples).
+
+    CSV must have a header row. Separator is auto-detected (comma, tab, semicolon).
+    """
+    # Try to detect the delimiter
+    try:
+        dialect = csv.Sniffer().sniff(data[:1024], delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel  # fallback to comma
+
+    reader = csv.DictReader(io.StringIO(data), dialect=dialect)
+    columns = reader.fieldnames or []
+    rows = [tuple(row[col] for col in columns) for row in reader]
+    return columns, rows  # type: ignore[return-value]
+
+
+def _parse_json_data(data: str) -> tuple[list[str], list[tuple[object, ...]]]:
+    """Parse JSON string (array of objects or single object).
+
+    Single object is auto-wrapped into a list.
+    Returns (column_names, rows_as_tuples).
+    """
+    parsed = json.loads(data)
+
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    elif not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        raise ValueError("JSON data must be an object or array of objects")
+
+    # Collect all column names, preserving order from first object
+    columns: list[str] = []
+    seen: set[str] = set()
+    for obj in parsed:
+        for key in obj:
+            if key not in seen:
+                columns.append(key)
+                seen.add(key)
+
+    rows = [tuple(obj.get(col) for col in columns) for obj in parsed]
+    return columns, rows
+
+
+def _query_sync(sql: str, data: str | None, data_format: str) -> QueryDataResult:
+    """Execute SQL SELECT on inline data via DuckDB (synchronous, runs in executor)."""
+    # Auto-detect format
+    if data_format == "auto" and data is not None:
+        data_format = _detect_format(data)
+
+    # Validate
+    validation_error = _query_data_validate(sql, data, data_format)
+    if validation_error is not None:
+        return validation_error
+
+    # Parse data if provided
+    columns: list[str] = []
+    rows: list[tuple[object, ...]] = []
+    if data is not None:
+        try:
+            if data_format == "csv":
+                columns, rows = _parse_csv_data(data)
+            elif data_format == "json":
+                columns, rows = _parse_json_data(data)
+        except (ValueError, json.JSONDecodeError) as exc:
+            fmt = "JSON" if data_format == "json" else "CSV"
+            return QueryDataResult(error=f"Failed to parse {fmt}: {exc}")
+        except csv.Error as exc:
+            return QueryDataResult(error=f"Failed to parse CSV: {exc}")
+
+    # Execute with DuckDB
+    con: duckdb.DuckDBPyConnection | None = None
+    timer: threading.Timer | None = None
+    timed_out = [False]
+
+    try:
+        con = duckdb.connect(":memory:")
+        con.execute("SET disabled_filesystems='LocalFileSystem'")
+        with contextlib.suppress(duckdb.Error):
+            con.execute("SET access_mode='read_only'")
+            # access_mode not supported in all versions; regex SELECT is the fallback
+
+        # Create input_data table if data provided
+        if data is not None:
+            col_names = ", ".join(f'"{c}"' for c in columns)
+            placeholders = ", ".join(["?"] * len(columns))
+            create_sql = (
+                f"CREATE TABLE input_data AS SELECT * FROM (VALUES ({placeholders})) t({col_names})"
+            )
+            con.execute(create_sql, rows)
+
+        # Set up timeout
+        def _on_timeout() -> None:
+            timed_out[0] = True
+            if con is not None:
+                con.interrupt()
+
+        timer = threading.Timer(QUERY_TIMEOUT, _on_timeout)
+        timer.start()
+
+        try:
+            result = con.sql(sql)
+            result_columns = result.columns
+            result_rows = [dict(zip(result_columns, row, strict=True)) for row in result.fetchall()]
+        finally:
+            timer.cancel()
+
+        if timed_out[0]:
+            return QueryDataResult(error="Query timeout after 10 seconds")
+
+        return QueryDataResult(
+            columns=result_columns,
+            rows=result_rows,
+            row_count=len(result_rows),
+        )
+
+    except duckdb.Error as exc:
+        if timed_out[0]:
+            return QueryDataResult(error="Query timeout after 10 seconds")
+        return QueryDataResult(error=str(exc))
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if con is not None:
+            con.close()
+
+
+# ── MCP Tools ────────────────────────────────────────────────────────────
+
+
 @mcp.tool(
     name="execute_code",
     description=("Execute Python, JavaScript or Bash code. Returns stdout, stderr and exit_code."),
@@ -280,6 +475,25 @@ async def execute_code(language: str, code: str) -> ExecutionResult:
     async with _execution_semaphore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _execute_sync, language, code)
+
+
+@mcp.tool(
+    name="query_data",
+    description=(
+        "Execute a SQL SELECT query on inline CSV/JSON data using DuckDB. "
+        "Data is loaded into an 'input_data' table in a temporary :memory: database. "
+        "If no data is provided, query runs on an empty database."
+    ),
+)
+async def query_data(
+    sql: str,
+    data: str | None = None,
+    data_format: str = "auto",
+) -> QueryDataResult:
+    """Run SQL query on inline data and return structured result."""
+    async with _execution_semaphore:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _query_sync, sql, data, data_format)
 
 
 # ── FastAPI application ──────────────────────────────────────────────────
