@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai) when working with this re
 
 ## Project Overview
 
-**MCP Sandbox** — a lightweight [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server for executing code via a single tool: `execute_code`. It runs Python, JavaScript, and Bash in subprocesses (no Docker-in-Docker). Isolation is enforced at the K8s pod level.
+**MCP Sandbox** — a lightweight [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server for executing code via tools: `execute_code` and `query_data` (DuckDB SQL). It runs Python, JavaScript, and Bash in subprocesses (no Docker-in-Docker). Isolation is enforced at the K8s pod level.
 
 - **Version:** 0.2.1
 - **Language:** Python 3.12+
@@ -14,17 +14,18 @@ This file provides guidance to Claude Code (claude.ai) when working with this re
 ## Architecture
 
 ```
-┌─────────────┐     SSE      ┌──────────────┐     subprocess      ┌──────────┐
-│  MCP Client  │ ←─────────→ │  FastAPI app  │ ←───────────────→ │  python3  │
-│ (LobeChat,   │  /sse       │  + FastMCP    │   start_new_       │  node     │
-│  Claude,     │  /messages  │               │   session=True     │  bash     │
-│  Cursor...)  │             │               │                    │           │
-└─────────────┘             ┌────────────────┐                  └──────────┘
-                            │  Cron killer    │
-                            │  (every 15s)    │
-                            │  SIGKILL hung   │
-                            │  processes      │
-                            └────────────────┘
+┌─────────────┐   SSE/HTTP   ┌──────────────┐   subprocess    ┌──────────┐
+│  MCP Client  │ ←─────────→ │  FastAPI app  │ ←─────────────→ │  python3  │
+│ (LobeChat,   │  /sse       │  + FastMCP    │                 │  node     │
+│  Claude,     │  /messages  │               │                 │  bash     │
+│  Cursor...)  │             │  ┌──────────┐ │                 │           │
+└─────────────┘             │  │ DuckDB   │ │                 └──────────┘
+                            │  │ :memory: │ │
+                            │  └──────────┘ │
+                            │  query_data   │
+                            │               │
+                            │  Cron killer  │
+                            └──────────────┘
 ```
 
 ### Key Design Decisions
@@ -77,7 +78,16 @@ mcp-sandbox/
 - **Auth middleware:** Validates `Authorization: Bearer <token>` on all paths except `/health`
 - **CORS:** Allows all origins (required for browser-based MCP clients)
 - **MCP tool `execute_code(language, code)`:** Async wrapper around `_execute_sync`, with `Semaphore(10)` rate limiting
-- **`_execute_sync(language, code)`:** Synchronous execution in a thread pool:
+- - **MCP tool `query_data(sql, data?, data_format?)`:** Async wrapper around `_query_sync`. Runs in-process via `run_in_executor`, using DuckDB :memory: with `disabled_filesystems='LocalFileSystem'` and `access_mode='read_only'`.
+- **`_query_sync(sql, data, data_format)`:** Synchronous DuckDB execution:
+  1. Validates inputs via `_query_data_validate` (SELECT/WITH only, size limits)
+  2. Parses inline data via `_parse_csv_data` / `_parse_json_data` (stdlib, not DuckDB readers)
+  3. Creates `:memory:` connection, sets `disabled_filesystems`, `access_mode='read_only'`
+  4. Creates `input_data` table with parameterized INSERT
+  5. Executes SQL with `threading.Timer(10s, con.interrupt)` timeout
+  6. Returns `QueryDataResult(columns, rows, row_count)` or error
+
+**`_execute_sync(language, code)`:** Synchronous execution in a thread pool:
   1. Validates inputs via `_validate_input`
   2. Creates temp dir (`mktemp` with `0o600` permissions)
   3. Writes code to temp file with language-appropriate extension (`.py`, `.js`, `.sh`)
@@ -134,6 +144,12 @@ uv run pytest tests/test_smoke.py -v
 
 # External API tests (requires .env with API keys)
 uv run pytest tests/test_minimax.py tests/test_yandex_search.py -v
+
+# DuckDB query_data unit tests
+uv run pytest tests/test_query_data.py -v
+
+# DuckDB query_data MCP smoke tests (requires live server)
+uv run pytest tests/test_query_data_smoke.py -v
 
 # All tests
 uv run pytest tests/ -v
@@ -206,6 +222,8 @@ Place API keys in `.env` (gitignored) or K8s secrets.
 | `test_smoke.py` | 10 | Health endpoint, SSE, full MCP protocol (list_tools + execute Python/JS/Bash) |
 | `test_minimax.py` | 7 | Chat completion via MCP, reasoning mode, edge cases (invalid key/model) |
 | `test_yandex_search.py` | 6 | Search API via MCP, XML parsing, edge cases (invalid key/folder/query) |
+| `test_query_data.py` | 42 | Unit tests: validation, CSV/JSON parsing, SELECT enforcement, timeout, aggregations, file system blocking, concurrent execution, security hardening |
+| `test_query_data_smoke.py` | 12 | MCP protocol: list_tools, basic queries, cross-tool (execute>query>execute), 1000-row CSV, Unicode, sequential isolation, concurrent MCP, error propagation |
 
 ### Test Fixtures (conftest.py)
 

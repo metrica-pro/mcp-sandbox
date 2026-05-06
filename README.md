@@ -66,6 +66,49 @@ curl -s http://localhost:8181/sse  # (MCP SSE protocol)
 python test_mcp.py
 ```
 
+## MCP Tool: `query_data`
+
+```
+Parameters:
+  sql         — SQL SELECT statement (64 KB max, only SELECT/WITH)
+  data        — optional inline CSV/JSON string (500 KB max)
+  data_format — "csv" | "json" | "auto" (default: "auto")
+
+Returns:
+  columns   — list of column names
+  rows      — list of dicts (column→value)
+  row_count — number of rows
+  error     — message if validation fails, SQL error, or timeout (10s)
+```
+
+### Examples
+
+```bash
+# CSV data
+curl -X POST http://localhost:8181/sse -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"query_data","arguments":{"sql":"SELECT * FROM input_data","data":"name,age\nAlice,30\nBob,25","data_format":"csv"}},"id":1}'
+
+# JSON data (auto-detected)
+curl -X POST http://localhost:8181/sse -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"query_data","arguments":{"sql":"SELECT * FROM input_data","data":"[{\"x\":1},{\"x\":2}]","data_format":"auto"}},"id":1}'
+
+# Pure SQL (no data)
+curl -X POST http://localhost:8181/sse -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"query_data","arguments":{"sql":"SELECT 1+1 AS result"}},"id":1}'
+```
+
+### Using DuckDB via execute_code
+
+For advanced analytics (multi-query chains, file operations), use DuckDB inside `execute_code("python", ...)`:
+
+```python
+import duckdb
+con = duckdb.connect()
+con.execute("CREATE TABLE t AS SELECT * FROM range(100)")
+result = con.execute("SELECT COUNT(*) FROM t").fetchone()
+print(result)
+```
+
 ## Security & Isolation
 
 | Feature | Detail |
