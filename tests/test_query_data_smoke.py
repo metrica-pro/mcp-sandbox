@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from mcp import ClientSession
@@ -114,8 +115,12 @@ class TestCrossTool:
                 },
             )
             exec_text = exec_result.content[0].text if exec_result.content else ""
-            lines = exec_text.strip().split("\n")
-            csv_data = "\n".join(line for line in lines if "," in line)
+            # Parse JSON ExecutionResult to extract stdout
+            try:
+                exec_data = json.loads(exec_text)
+                csv_data = exec_data.get("stdout", "").strip()
+            except (json.JSONDecodeError, AttributeError):
+                csv_data = exec_text.strip()
 
             # Query generated CSV
             query_result = await session.call_tool(
@@ -187,8 +192,8 @@ class TestComplexIntegration:
                 },
             )
             output = result.content[0].text if result.content else ""
-            # Each group should have ~100 rows
-            assert "100" in output
+            # Each group should have 200 rows (even values: 0,2,4,...)
+            assert "200" in output
 
     @pytest.mark.asyncio
     async def test_unicode_data(self, sandbox_server: str) -> None:
