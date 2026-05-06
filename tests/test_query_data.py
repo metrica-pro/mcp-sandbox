@@ -230,3 +230,57 @@ class TestQuerySync:
     def test_invalid_data_format_error(self) -> None:
         result = _query_sync("SELECT 1", "a\n1", "xml")
         assert "error" in result
+
+
+class TestSecurityHardening:
+    def test_disabled_filesystems_persists(self) -> None:
+        """After failed read_csv_auto, normal SELECT still works — connection intact."""
+        # First, try the blocked query
+        result1 = _query_sync(
+            "SELECT * FROM read_csv_auto('/etc/passwd')",
+            None,
+            "auto",
+        )
+        assert "error" in result1
+        # Then, normal query on same connection (new connection per _query_sync)
+        result2 = _query_sync("SELECT 1+1 AS ok", None, "auto")
+        assert "error" not in result2
+        assert result2["rows"] == [{"ok": 2}]
+
+    def test_case_insensitive_select(self) -> None:
+        """Lowercase select is valid."""
+        result = _query_sync(
+            "  select * from input_data",
+            "col\n1",
+            "csv",
+        )
+        assert "error" not in result
+
+    def test_pragma_blocked(self) -> None:
+        """PRAGMA is not SELECT."""
+        result = _query_sync("PRAGMA version", None, "auto")
+        assert "error" in result
+        assert "Only SELECT" in result["error"]
+
+    def test_explain_blocked(self) -> None:
+        """EXPLAIN is not SELECT/WITH."""
+        result = _query_sync("EXPLAIN SELECT 1", None, "auto")
+        assert "error" in result
+        assert "Only SELECT" in result["error"]
+
+    def test_concurrent_queries(self) -> None:
+        """Five concurrent _query_sync calls — all complete without errors."""
+        import concurrent.futures
+
+        def run_query(i: int) -> bool:
+            result = _query_sync(
+                f"SELECT {i} AS val",
+                None,
+                "auto",
+            )
+            return "error" not in result
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(run_query, i) for i in range(5)]
+            results = [f.result() for f in futures]
+        assert all(results)
