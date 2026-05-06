@@ -18,7 +18,6 @@ import csv
 import io
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -317,7 +316,8 @@ def _query_data_validate(
             error=f"SQL query exceeds maximum size of {MAX_SQL_LENGTH:,} characters"
         )
 
-    if re.match(r"^\s*SELECT\b", sql, re.IGNORECASE) is None:
+    sql_stripped = sql.lstrip().upper()
+    if not (sql_stripped.startswith("SELECT") or sql_stripped.startswith("WITH")):
         return QueryDataResult(error="Only SELECT queries are allowed")
 
     # Validate data_format
@@ -419,13 +419,11 @@ def _query_sync(sql: str, data: str | None, data_format: str) -> QueryDataResult
             # access_mode not supported in all versions; regex SELECT is the fallback
 
         # Create input_data table if data provided
-        if data is not None:
-            col_names = ", ".join(f'"{c}"' for c in columns)
+        if data is not None and columns:
+            col_defs = ", ".join(f'"{c}" VARCHAR' for c in columns)
+            con.execute(f"CREATE TABLE input_data ({col_defs})")
             placeholders = ", ".join(["?"] * len(columns))
-            create_sql = (
-                f"CREATE TABLE input_data AS SELECT * FROM (VALUES ({placeholders})) t({col_names})"
-            )
-            con.execute(create_sql, rows)
+            con.executemany(f"INSERT INTO input_data VALUES ({placeholders})", rows)
 
         # Set up timeout
         def _on_timeout() -> None:
