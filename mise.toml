@@ -1,0 +1,5 @@
+# Tooling/docs repo — pin only if needed later.
+
+[tasks.status]
+description = "Git status"
+run = "git status -sb"
